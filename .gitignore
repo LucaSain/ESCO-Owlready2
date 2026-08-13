@@ -2,24 +2,20 @@ backend/env
 backend/__pycache__
 backend/esco.rdf
 backend/"ESCO dataset - v1.2.1 - classification - - rdf.zip"
-frontend//node_modules
-frontend//.pnp
+frontend/node_modules
+frontend/.pnp
 frontend/.pnp.*
 frontend/.yarn/*
-frontend/!.yarn/patches
-frontend/!.yarn/plugins
-frontend/!.yarn/releases
-frontend/!.yarn/versions
 
 # testing
-frontend//coverage
+frontend/coverage
 
 # next.js
-frontend//.next/
-frontend//out/
+frontend/.next/
+frontend/out/
 
 # production
-frontend//build
+frontend/build
 
 # misc
 frontend/.DS_Store

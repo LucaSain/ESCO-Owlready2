@@ -11,9 +11,14 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     
     print()
-    reasoning.JAVA_MEMORY = 8*1024*1024
+    # JAVA_MEMORY is in MEGABYTES (owlready2 passes it as -Xmx%sM).
+    # 8*1024*1024 asked the JVM for 8 TB of heap -> see hs_err_pid*.log.
+    # reasoning.JAVA_MEMORY = 8*1024   # 8 GB, if/when reasoning is re-enabled
     onto = load("esco.rdf")
-    before,after = reason(onto)
+    # Disabled: ESCO declares no owl:Class/owl:NamedIndividual, so snapshot()
+    # is empty and there is nothing to infer -- while Pellet still tries to
+    # materialise the whole 1.1 GB graph in memory.
+    # before, after = reason(onto)
     yield
     onto.clear()
 
