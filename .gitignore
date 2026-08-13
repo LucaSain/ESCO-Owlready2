@@ -1,6 +1,11 @@
 backend/env
 backend/__pycache__
 backend/esco.rdf
+backend/esco.sqlite3
+backend/esco.sqlite3-journal
+backend/tmp/
+backend/hs_err_pid*.log
+backend/core.*
 backend/"ESCO dataset - v1.2.1 - classification - - rdf.zip"
 frontend//node_modules
 frontend//.pnp
