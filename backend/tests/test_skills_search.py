@@ -145,3 +145,54 @@ def test_labels_for_respects_language_filter(store_module):
     # A language ESCO doesn't carry labels in (as far as this dataset is
     # concerned) must yield nothing for that entity, not raise.
     assert esco_store.labels_for([entity], lang="xx-not-a-real-lang") == {}
+
+
+class TestMultiWordSearch:
+    """Tier 3: every query word matches some label word, in any order.
+
+    Regression: a user types their own phrasing rather than ESCO's, so
+    "game development" -- which appears in no ESCO label as a contiguous
+    string -- returned nothing at all.
+    """
+
+    def test_phrase_absent_from_every_label_still_finds_skills(self, store_module):
+        import matching
+
+        hits = matching.search_skills("game development", limit=5)
+        assert hits, "expected the token tier to rescue a query with no substring match"
+        labels = [h["label"].lower() for h in hits]
+        # ESCO says "develop", the user typed "development" -- the
+        # bidirectional prefix is what bridges that.
+        assert any("develop" in lbl and "game" in lbl for lbl in labels), labels
+
+    def test_case_and_spacing_are_irrelevant(self, store_module):
+        import matching
+
+        assert (
+            [h["id"] for h in matching.search_skills("Game Development", limit=5)]
+            == [h["id"] for h in matching.search_skills("  game   development ", limit=5)]
+        )
+
+    def test_strict_tiers_still_rank_first(self, store_module):
+        import matching
+
+        # An exact label must not be displaced by looser token matches.
+        assert matching.search_skills("manage ICT project", limit=3)[0]["label"] == (
+            "manage ICT project"
+        )
+
+    def test_single_token_queries_are_unaffected(self, store_module):
+        import matching
+
+        # Tier 3 is skipped for single tokens, so this stays exactly as before.
+        assert matching.search_skills("python", limit=3)[0]["label"] == (
+            "Python (computer programming)"
+        )
+
+    def test_short_function_words_do_not_match_everything(self, store_module):
+        import matching
+
+        # "of" is below _MIN_RELAX, so it must not relax into every label
+        # that happens to contain a 2-letter word.
+        hits = matching.search_skills("of zzzznotaskill", limit=5)
+        assert hits == []
