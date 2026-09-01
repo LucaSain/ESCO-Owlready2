@@ -47,7 +47,14 @@ def open_store(exclusive: bool = False, read_only: bool = True):
     if not STORE_PATH.exists():
         raise FileNotFoundError(
             f"Quadstore not found: {STORE_PATH}\n"
-            f"Build it once with:  python ingest.py"
+            f"The 1.2 GB store is not shipped in the container image; it has "
+            f"to be put on the mounted volume once.\n"
+            f"  local dev  : python ingest.py   (parses ESCO_RDF, ~30s)\n"
+            f"  container  : copy an existing esco.sqlite3 onto the volume "
+            f"backing {STORE_PATH.parent}, e.g.\n"
+            f"               docker run --rm -v <volume>:/data -v $PWD:/src "
+            f"alpine cp /src/esco.sqlite3 /data/\n"
+            f"Set ESCO_STORE to change where it is looked for."
         )
     default_world.set_backend(
         filename=str(STORE_PATH), exclusive=exclusive, read_only=read_only
