@@ -12,9 +12,22 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type Skill = { id: string; label: string };
 
+type ShortlistEntry = {
+  id: string;
+  label: string;
+  shared_skills: number;
+  /** true when the reasoner classified the candidate into it, as opposed to
+   *  merely considering it. */
+  inferred: boolean;
+  /** ids of the candidate's skills this occupation requires -- the edges. */
+  matched_skills: string[];
+};
+
 type MatchResponse = {
   occupations: string[];
-  shortlist: { label: string; shared_skills: number }[];
+  shortlist: ShortlistEntry[];
+  /** the candidate's skills that reached the reasoner, with labels */
+  skills: Skill[];
   skills_used: number;
   unknown_skill_ids: string[];
   skills_not_required: string[];
@@ -52,6 +65,162 @@ function ResultsSkeleton() {
   );
 }
 
+function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}) {
+  return (
+    <label className="flex cursor-pointer select-none items-center gap-2 text-sm">
+      <span className="text-black/60 dark:text-white/60">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 rounded-full transition-colors ${
+          checked ? "bg-foreground" : "bg-black/20 dark:bg-white/25"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 size-4 rounded-full bg-background transition-[left] ${
+            checked ? "left-[1.125rem]" : "left-0.5"
+          }`}
+        />
+      </button>
+    </label>
+  );
+}
+
+const GRAPH = {
+  width: 920,
+  row: 30,
+  pad: 16,
+  leftLabel: 300, // skill labels end here
+  leftDot: 312,
+  rightDot: 608,
+  rightLabel: 620, // occupation labels start here
+};
+
+/** Truncate for SVG, which has no text-overflow. The full string goes in a
+ *  <title> so hovering still shows it. */
+function clip(text: string, max = 44) {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** Bipartite skills -> occupations graph. Deliberately hand-rolled SVG: a
+ *  typical result is ~26 nodes and ~37 edges, which a fixed two-column
+ *  layout renders more legibly than a force simulation, and costs no
+ *  dependency at all. */
+function SkillGraph({ data }: { data: MatchResponse }) {
+  const skills = data.skills;
+  // Inferred first, then by overlap: the ones the reasoner actually
+  // classified into belong at the top where they are read first.
+  const occupations = [...data.shortlist].sort(
+    (a, b) =>
+      Number(b.inferred) - Number(a.inferred) || b.shared_skills - a.shared_skills,
+  );
+
+  if (skills.length === 0 || occupations.length === 0) return null;
+
+  const rows = Math.max(skills.length, occupations.length);
+  const height = rows * GRAPH.row + GRAPH.pad * 2;
+  const span = height - GRAPH.pad * 2;
+  const y = (i: number, count: number) => GRAPH.pad + (span / count) * (i + 0.5);
+
+  const skillY = new Map(skills.map((s, i) => [s.id, y(i, skills.length)]));
+
+  return (
+    <div className="mt-6 overflow-x-auto">
+      <svg
+        viewBox={`0 0 ${GRAPH.width} ${height}`}
+        width={GRAPH.width}
+        className="max-w-full"
+        role="img"
+        aria-label={`${skills.length} skills connected to ${occupations.length} occupations`}
+      >
+        {/* edges first, so nodes and labels draw over them */}
+        {occupations.map((occ, oi) => {
+          const oy = y(oi, occupations.length);
+          return occ.matched_skills.map((sid) => {
+            const sy = skillY.get(sid);
+            if (sy === undefined) return null;
+            const mid = (GRAPH.leftDot + GRAPH.rightDot) / 2;
+            return (
+              <path
+                key={`${occ.id}-${sid}`}
+                d={`M ${GRAPH.leftDot} ${sy} C ${mid} ${sy}, ${mid} ${oy}, ${GRAPH.rightDot} ${oy}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={occ.inferred ? 1.5 : 1}
+                className={
+                  occ.inferred
+                    ? "text-black/40 dark:text-white/45"
+                    : "text-black/12 dark:text-white/15"
+                }
+              />
+            );
+          });
+        })}
+
+        {skills.map((s, i) => (
+          <g key={s.id} className="text-black/70 dark:text-white/70">
+            <title>{s.label}</title>
+            <text
+              x={GRAPH.leftLabel}
+              y={y(i, skills.length)}
+              textAnchor="end"
+              dominantBaseline="middle"
+              fontSize="12"
+              fill="currentColor"
+            >
+              {clip(s.label)}
+            </text>
+            <circle cx={GRAPH.leftDot} cy={y(i, skills.length)} r="3.5" fill="currentColor" />
+          </g>
+        ))}
+
+        {occupations.map((occ, i) => (
+          <g
+            key={occ.id}
+            className={
+              occ.inferred
+                ? "text-black dark:text-white"
+                : "text-black/35 dark:text-white/40"
+            }
+          >
+            <title>
+              {occ.label}
+              {occ.inferred ? " (inferred)" : " (considered, below threshold)"}
+            </title>
+            <circle cx={GRAPH.rightDot} cy={y(i, occupations.length)} r="3.5" fill="currentColor" />
+            <text
+              x={GRAPH.rightLabel}
+              y={y(i, occupations.length)}
+              dominantBaseline="middle"
+              fontSize="12"
+              fontWeight={occ.inferred ? 600 : 400}
+              fill="currentColor"
+            >
+              {clip(occ.label, 36)}
+            </text>
+          </g>
+        ))}
+      </svg>
+
+      <p className="mt-3 text-xs text-black/50 dark:text-white/50">
+        Bold occupations are the reasoner&apos;s conclusions. Faint ones were
+        considered but did not meet the threshold.
+      </p>
+    </div>
+  );
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Skill[]>([]);
@@ -62,6 +231,7 @@ export default function Home() {
   const [data, setData] = useState<MatchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [graphView, setGraphView] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -292,15 +462,25 @@ export default function Home() {
         <section
           className={`mt-10 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}
         >
-          <p className="text-sm text-black/50 dark:text-white/50">
-            {data.skills_used} skill{data.skills_used === 1 ? "" : "s"} used ·
-            threshold {data.min_skills} · reasoned in {data.seconds}s
-            {data.skills_not_required.length > 0 && (
-              <> · {data.skills_not_required.length} not required by any shortlisted occupation</>
-            )}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-black/50 dark:text-white/50">
+              {data.skills_used} skill{data.skills_used === 1 ? "" : "s"} used ·
+              reasoned in {data.seconds}s
+              {data.skills_not_required.length > 0 && (
+                <> · {data.skills_not_required.length} not required by any shortlisted occupation</>
+              )}
+            </p>
 
-          {data.occupations.length === 0 ? (
+            <Switch
+              checked={graphView}
+              onChange={setGraphView}
+              label="Graph View:"
+            />
+          </div>
+
+          {graphView ? (
+            <SkillGraph data={data} />
+          ) : data.occupations.length === 0 ? (
             <p className="mt-6 text-sm text-black/60 dark:text-white/60">
               No occupation met the threshold. Try adding more skills — the
               reasoner needs at least {data.min_skills} of an occupation&apos;s

@@ -58,6 +58,10 @@ class TBox:
     hasSkill: type
     skills: dict = field(default_factory=dict)       # ESCO skill entity -> individual
     occupations: dict = field(default_factory=dict)  # generated class -> english label
+    # occupation entity -> its essential skill entities. Already computed to
+    # build the axioms, so exposing it lets callers derive skill/occupation
+    # edges without re-querying ESCO.
+    essential: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -160,7 +164,7 @@ def build_tbox(occupations, min_skills: int = DEFAULT_MIN_SKILLS, lang: str = "e
             occupations_map[cls] = names.get(occ, _short(occ))
 
     return TBox(world=world, onto=onto, Person=Person, hasSkill=hasSkill,
-                skills=skills, occupations=occupations_map)
+                skills=skills, occupations=occupations_map, essential=essential)
 
 
 def resolve_skills(skill_ids, tbox: TBox) -> Resolution:
@@ -245,15 +249,41 @@ def recommend(skill_ids, shortlist: int = DEFAULT_SHORTLIST,
     try:
         person, resolution = add_candidate(tbox, skill_ids)
         occupations = infer(tbox, person)
+        inferred = set(occupations)
+
+        # The candidate's skills that actually reached the TBox, with labels,
+        # so a client can draw the graph without a second round trip.
+        used = [s for s in (default_world[i] for i in skill_ids)
+                if s is not None and s in tbox.skills]
+        used_set = set(used)
+        skill_names = labels_for(used, lang)
+
         return {
             "occupations": sorted(occupations),
             # Built from `rows` and a fresh label lookup rather than by
             # zipping against tbox.occupations, which would silently depend
             # on dict insertion order matching the query result order.
             "shortlist": [
-                {"label": shortlist_names.get(occ, _short(occ)),
-                 "shared_skills": n}
+                {
+                    "id": _short(occ),
+                    "label": shortlist_names.get(occ, _short(occ)),
+                    "shared_skills": n,
+                    # Whether the reasoner actually classified the candidate
+                    # into it, as opposed to merely considering it.
+                    "inferred": shortlist_names.get(occ, _short(occ)) in inferred,
+                    # The graph edges: which of the candidate's skills this
+                    # occupation requires. Free -- tbox.essential is already
+                    # in memory from building the axioms.
+                    "matched_skills": [
+                        _short(s) for s in tbox.essential.get(occ, ())
+                        if s in used_set
+                    ],
+                }
                 for occ, n in rows
+            ],
+            "skills": [
+                {"id": _short(s), "label": skill_names.get(s, _short(s))}
+                for s in used
             ],
             "skills_used": len(resolution.individuals),
             "unknown_skill_ids": resolution.unknown,
