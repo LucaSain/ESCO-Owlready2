@@ -1,0 +1,79 @@
+# Run the frontend test suite, plus the other cheap correctness checks that
+# would otherwise only surface at deploy time in
+# deploy_to_cloudflare_pages.yml (type errors, lint, the production build).
+#
+# ASSUMPTION (unverified against the actual test suite, written concurrently
+# by another agent): tests are vitest, run non-watch via `npm run test:run`.
+# If that script does not exist yet, add it (e.g. `vitest run`) rather than
+# changing this workflow's invocation.
+
+name: Test frontend
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "frontend/**"
+      - ".github/workflows/test_frontend.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/test_frontend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel a stale run for the same ref/PR when a new push lands.
+  group: test-frontend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Only applies to `run:` steps below, never to `uses:` steps -- the
+    # setup-node step still needs an explicit frontend/ path for its
+    # cache-dependency-path, see below.
+    working-directory: "frontend/"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup NodeJS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: "npm"
+          # The lockfile lives in frontend/, not the repo root -- setup-node
+          # assumes the root by default and silently caches nothing useful
+          # if this is left out.
+          cache-dependency-path: "frontend/package-lock.json"
+
+      - name: Install Deps
+        run: "npm ci"
+
+      # Four independent checks, all required, run in increasing order of
+      # cost so a fast failure (a type error) does not wait behind a slow
+      # one (the production build).
+      - name: Type check
+        run: "npx tsc --noEmit"
+
+      - name: Lint
+        run: "npm run lint"
+
+      - name: Test
+        run: "npm run test:run"
+
+      - name: Build
+        run: "npm run build"
+        env:
+          # Matches deploy_to_cloudflare_pages.yml's build step. Unset here
+          # (this workflow has no reason to carry the Cloudflare Pages
+          # project's vars/secrets), which is fine -- this build only needs
+          # to succeed, nothing consumes its output.
+          "NEXT_PUBLIC_API_URL": ${{ vars.NEXT_PUBLIC_API_URL }}

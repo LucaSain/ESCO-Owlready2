@@ -41,22 +41,3 @@ jobs:
                   accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
                   command: pages deploy frontend/out --project-name=esco
                   gitHubToken: ${{ secrets.GITHUB_TOKEN }}
-
-
-
-# ---------------------------------------------------------------------------
-# BEFORE THE FIRST RUN
-# ---------------------------------------------------------------------------
-# - Create the Pages project in the Cloudflare dashboard (Direct Upload, not
-#   Git integration -- if you connect the repo there too, both will deploy
-#   and race each other).
-# - Repo settings -> Secrets and variables -> Actions:
-#     secret CLOUDFLARE_API_TOKEN
-#     secret CLOUDFLARE_ACCOUNT_ID
-#     variable NEXT_PUBLIC_API_URL   (your deployed backend, https)
-# - The backend is not deployed yet, so the first deploy will render fine and
-#   fail on every request until Coolify is up and NEXT_PUBLIC_API_URL points
-#   at it. Expected -- do not debug the frontend for that.
-# - CORS: backend/main.py currently allows only http://localhost:3000. The
-#   deployed site is a different origin and every request will be blocked
-#   until that list includes the Pages domain.

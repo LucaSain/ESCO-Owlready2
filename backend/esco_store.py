@@ -106,6 +106,13 @@ def labels_for(entities, lang: str = "en") -> dict:
     1.1M skosxl:Label triples and the query takes ~40s; constrained to the
     entities you already hold it is well under a second.
     """
+    # Drop Nones rather than letting them reach the query. default_world[iri]
+    # returns None for anything it does not recognise -- including a bare
+    # UUID, since it expects a full IRI -- and a None in the IN list
+    # serialises to malformed JSON, surfacing as
+    # sqlite3.OperationalError: malformed JSON. Cheap to guard, very
+    # confusing to debug.
+    entities = [e for e in entities if e is not None]
     if not entities:
         return {}
     return {

@@ -1,0 +1,3 @@
+# Test-only dependencies. Install with:  pip install -r requirements-dev.txt
+# (requirements.txt is installed separately; this layers on top of it.)
+pytest==9.1.1

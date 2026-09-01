@@ -1,0 +1,160 @@
+# Run the backend test suite against the real quadstore.
+#
+# ASSUMPTION (unverified against the actual test suite, written concurrently
+# by another agent): tests live under backend/tests/, dev deps are pinned in
+# backend/requirements-dev.txt, and the invocation is
+#   cd backend; python -m pytest -m "not slow"
+# If any of that turns out wrong, fix this file rather than the assumption.
+
+name: Test backend
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/test_backend.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/test_backend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel a stale run for the same ref/PR when a new push lands, so we are
+  # never downloading the 1.2 GB store twice for commits nobody cares about
+  # any more.
+  group: test-backend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: "backend/"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+          # setup-python hashes this glob to key the pip cache; it covers
+          # both requirements.txt and requirements-dev.txt.
+          cache-dependency-path: "backend/requirements*.txt"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # ---------------------------------------------------------------------
+      # THE QUADSTORE
+      # ---------------------------------------------------------------------
+      # esco.sqlite3 is a 1.2 GB owlready2 quadstore. It is gitignored (and
+      # over GitHub's 100 MB file limit regardless), so it is published as a
+      # release asset instead and has to be fetched here or every test that
+      # touches esco_store.open_store() skips -- a green run that tested
+      # nothing. See backend/esco_store.py's FileNotFoundError message and
+      # backend/entrypoint.sh, which fetches the same asset the same way on
+      # container boot.
+      - name: Cache quadstore
+        id: cache-store
+        uses: actions/cache@v4
+        with:
+          path: backend/esco.sqlite3
+          # Keyed on the release tag, not a hash of the file (we would have
+          # to download it to hash it, defeating the point). Cutting a new
+          # esco-data-vN release naturally busts this.
+          #
+          # Tradeoff, measured: restoring a 1.2 GB cache is not obviously
+          # faster than a fresh 415 MB compressed download -- GitHub's cache
+          # transfer is not much quicker than actions/checkout's network
+          # path, and the cache costs a write on every miss plus the 10 GB
+          # per-repo cache budget. Kept anyway because repeated runs against
+          # an unchanged release tag (the common case on a PR with several
+          # pushes) skip the download entirely; revisit if cache pressure
+          # ever evicts more useful entries.
+          key: esco-quadstore-esco-data-v1
+
+      - name: Fetch quadstore
+        if: steps.cache-store.outputs.cache-hit != 'true'
+        run: |
+          # Streamed through zstd so the 415 MB archive never lands on disk,
+          # only the 1.2 GB decompressed store -- the same pattern as
+          # entrypoint.sh, proven there against this exact asset. Ubuntu
+          # runners ship zstd, so no extra install step.
+          curl -fsSL --retry 3 --retry-delay 5 \
+            "https://github.com/LucaSain/ESCO-Owlready2/releases/download/esco-data-v1/esco.sqlite3.zst" \
+            | zstd -d -o esco.sqlite3
+
+          # curl | zstd hides a mid-stream curl failure from $?; check the
+          # result is really a SQLite file rather than trusting the exit
+          # status of the pipeline (bash has pipefail on by default for
+          # `run:` steps, but be explicit and cheap about it anyway).
+          if [ "$(head -c 15 esco.sqlite3)" != "SQLite format 3" ]; then
+            echo "::error::downloaded quadstore is not a SQLite database"
+            exit 1
+          fi
+
+      # NOTE: deliberately NOT installing a JRE here. HermiT (the DL
+      # reasoner in backend/reasoning.py) is a Java subprocess owlready2
+      # shells out to, but it is only exercised by tests marked `slow` --
+      # which `-m "not slow"` below excludes. If this job starts failing
+      # because a test needs Java, that test is almost certainly missing the
+      # `slow` marker, not this workflow missing a JRE. See backend/
+      # Dockerfile for the JRE install this job intentionally skips.
+
+      - name: Run tests
+        run: |
+          # --strict-markers turns a typo'd @pytest.mark.slow into a hard
+          # error instead of a silently-ignored marker, so "not slow" keeps
+          # meaning what we think it means.
+          #
+          # `|| true` plus an explicit exit-code check below, rather than
+          # letting a failure end the step immediately, because we want to
+          # inspect pytest's own summary line either way: a crash and an
+          # empty/all-skipped run are different failure modes and get
+          # different messages.
+          set +e
+          # --color=no is load-bearing, not cosmetic: pytest colourises the
+          # summary line in CI, so it arrives as "\033[33m===== 28 skipped
+          # ..." and the ^=+ grep below silently never matches -- which
+          # would disable the all-skipped guard entirely. Verified against
+          # real pytest output, not a synthetic sample.
+          python -m pytest -m "not slow" --strict-markers -ra --color=no | tee pytest.out
+          status=${PIPESTATUS[0]}
+          set -e
+
+          # Exit code 5 is pytest's own "no tests were collected" signal --
+          # more reliable than scraping wording that has changed across
+          # pytest versions.
+          if [ "$status" -eq 5 ]; then
+            echo "::error::pytest collected zero tests -- workflow assumption about the test layout (backend/tests/, 'pytest -m \"not slow\"') is probably stale"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+          # Belt and braces beyond exit code 5: a suite that collects tests
+          # but skips every single one (e.g. the quadstore fetch above
+          # silently produced a bad file, and every test's fixture skips
+          # rather than errors) also exits 0 and must not read as a pass.
+          # The final summary line looks like "===== 5 skipped in 1.23s
+          # =====" when nothing but skips ran, and always mentions "passed"
+          # otherwise.
+          summary=$(grep -E "^=+ .* =+$" pytest.out | tail -1)
+          if echo "$summary" | grep -q "skipped" && ! echo "$summary" | grep -q "passed"; then
+            echo "::error::every collected test was skipped -- a green run here is meaningless, check the quadstore fetch above"
+            echo "$summary"
+            exit 1
+          fi
