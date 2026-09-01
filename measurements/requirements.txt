@@ -1,0 +1,12 @@
+# Notebook-only dependencies. The notebooks import backend/ modules directly,
+# so install these into the backend venv:
+#
+#   backend/env/bin/pip install -r measurements/requirements.txt
+#
+# Then register the kernel:
+#
+#   backend/env/bin/python -m ipykernel install --user --name esco
+ipykernel
+matplotlib
+pandas
+numpy

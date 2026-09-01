@@ -55,3 +55,6 @@ backend/tmp/
 
 # compressed quadstore -- distributed as a release asset, never committed
 backend/*.zst
+
+# notebook checkpoints and generated outputs
+measurements/.ipynb_checkpoints/
