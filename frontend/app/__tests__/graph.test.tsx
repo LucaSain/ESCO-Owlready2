@@ -35,6 +35,20 @@ const graphFixture = {
   seconds: 1.2,
 };
 
+/** What a backend older than this bundle returns: no `skills`, and shortlist
+ *  entries without id / inferred / matched_skills. Version skew between a
+ *  cached page and a rolling API is a normal transient state, so the graph
+ *  must degrade rather than throw. */
+const legacyFixture = {
+  occupations: ["Data scientist"],
+  shortlist: [{ label: "Data scientist", shared_skills: 2 }],
+  skills_used: 2,
+  unknown_skill_ids: [],
+  skills_not_required: [],
+  min_skills: 1,
+  seconds: 1.2,
+};
+
 function setup() {
   render(<Home />);
   const input = screen.getByRole("combobox");
@@ -112,5 +126,29 @@ describe("Graph View switch", () => {
     // 2 edges from the inferred occupation (s1, s2) + 1 from the
     // non-inferred one (s1 only -- "sX" has no matching skill node).
     expect(svg.querySelectorAll("path")).toHaveLength(3);
+  });
+
+  it("degrades with a message instead of throwing when the API omits graph data", async () => {
+    // Regression: `data.skills` was dereferenced directly, so a legacy
+    // response crashed the page with "can't access property length, l is
+    // undefined" the moment the switch was flipped.
+    installFetch({
+      "/skills": () => jsonResponse(skillsFixture),
+      "/match": () => jsonResponse(legacyFixture),
+    });
+    const { input } = setup();
+    await addSkillViaSearch(input, "python", "Python programming");
+
+    vi.useRealTimers();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Match" }));
+    await screen.findByText("Data scientist");
+
+    await user.click(screen.getByRole("switch", { name: "Graph View:" }));
+
+    expect(
+      screen.getByText(/doesn't return graph data yet/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 });

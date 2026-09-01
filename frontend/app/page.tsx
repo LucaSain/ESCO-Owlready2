@@ -13,21 +13,25 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 type Skill = { id: string; label: string };
 
 type ShortlistEntry = {
-  id: string;
   label: string;
   shared_skills: number;
+  // Everything below arrived with the graph view. They are optional because
+  // a backend older than this bundle omits them, and a cached page against a
+  // rolling API is a normal transient state -- not a reason to crash.
+  id?: string;
   /** true when the reasoner classified the candidate into it, as opposed to
    *  merely considering it. */
-  inferred: boolean;
+  inferred?: boolean;
   /** ids of the candidate's skills this occupation requires -- the edges. */
-  matched_skills: string[];
+  matched_skills?: string[];
 };
 
 type MatchResponse = {
   occupations: string[];
   shortlist: ShortlistEntry[];
-  /** the candidate's skills that reached the reasoner, with labels */
-  skills: Skill[];
+  /** the candidate's skills that reached the reasoner, with labels.
+   *  Absent from responses predating the graph view. */
+  skills?: Skill[];
   skills_used: number;
   unknown_skill_ids: string[];
   skills_not_required: string[];
@@ -118,13 +122,25 @@ function clip(text: string, max = 44) {
  *  layout renders more legibly than a force simulation, and costs no
  *  dependency at all. */
 function SkillGraph({ data }: { data: MatchResponse }) {
-  const skills = data.skills;
+  const skills = data.skills ?? [];
   // Inferred first, then by overlap: the ones the reasoner actually
   // classified into belong at the top where they are read first.
   const occupations = [...data.shortlist].sort(
     (a, b) =>
       Number(b.inferred) - Number(a.inferred) || b.shared_skills - a.shared_skills,
   );
+
+  // A response with no `skills` came from a backend that predates the graph
+  // data. Say so plainly rather than rendering an empty box or throwing --
+  // "can't access property length" tells the user nothing actionable.
+  if (data.skills === undefined) {
+    return (
+      <p className="mt-6 text-sm text-black/60 dark:text-white/60">
+        This API build doesn&apos;t return graph data yet. The list view still
+        works.
+      </p>
+    );
+  }
 
   if (skills.length === 0 || occupations.length === 0) return null;
 
@@ -147,13 +163,13 @@ function SkillGraph({ data }: { data: MatchResponse }) {
         {/* edges first, so nodes and labels draw over them */}
         {occupations.map((occ, oi) => {
           const oy = y(oi, occupations.length);
-          return occ.matched_skills.map((sid) => {
+          return (occ.matched_skills ?? []).map((sid) => {
             const sy = skillY.get(sid);
             if (sy === undefined) return null;
             const mid = (GRAPH.leftDot + GRAPH.rightDot) / 2;
             return (
               <path
-                key={`${occ.id}-${sid}`}
+                key={`${occ.id ?? occ.label}-${sid}`}
                 d={`M ${GRAPH.leftDot} ${sy} C ${mid} ${sy}, ${mid} ${oy}, ${GRAPH.rightDot} ${oy}`}
                 fill="none"
                 stroke="currentColor"
@@ -187,7 +203,7 @@ function SkillGraph({ data }: { data: MatchResponse }) {
 
         {occupations.map((occ, i) => (
           <g
-            key={occ.id}
+            key={occ.id ?? occ.label}
             className={
               occ.inferred
                 ? "text-black dark:text-white"
