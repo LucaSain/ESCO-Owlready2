@@ -40,6 +40,23 @@ services:
       # it only if you provision the volume by hand.
       - ESCO_STORE_URL=${ESCO_STORE_URL:-https://github.com/LucaSain/ESCO-Owlready2/releases/download/esco-data-v1/esco.sqlite3.zst}
 
+      # How many of an occupation's essential skills the candidate must hold
+      # before the reasoner classifies them into it. Default 2.
+      #
+      # This is also a PERFORMANCE control, not just a precision one.
+      # Measured on a 6-skill optics/photonics profile:
+      #     min_skills=3  ->  117.4s, 4 occupations
+      #     min_skills=2  ->    2.9s, 8 occupations
+      # Proving "at least 3 distinct fillers" over nominals forces far more
+      # tableau branching than "at least 2". Raise this only if you are ready
+      # for requests that can take minutes.
+      - MIN_SKILLS=${MIN_SKILLS:-2}
+
+      # Occupations handed to the reasoner. Cost grows steeply: 20 -> ~3.5s,
+      # 40 -> 192s, 80 -> did not finish. /match caps the per-request
+      # override at 40 for that reason.
+      - SHORTLIST=${SHORTLIST:-20}
+
       # HermiT's max heap. Must stay comfortably below the memory limit
       # further down, or the kernel kills the JVM mid-request and the
       # response is a 500 with nothing useful in the logs.

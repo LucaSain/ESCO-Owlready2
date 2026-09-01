@@ -45,8 +45,19 @@ reasoning.JAVA_MEMORY = int(os.environ.get("JAVA_MEMORY_MB", "2048"))
 
 SKILL_NS = "http://data.europa.eu/esco/skill/"
 
-DEFAULT_SHORTLIST = 20
-DEFAULT_MIN_SKILLS = 3
+# Both are env-overridable because they are the tuning knobs, not
+# implementation details -- and changing them should not need a rebuild.
+#
+# SHORTLIST: how many occupations the reasoner is handed. Reasoning cost
+#   grows steeply with this (20 -> ~3.5s, 40 -> 192s, 80 -> did not finish),
+#   which is why /match caps the request parameter at 40.
+#
+# MIN_SKILLS: how many of an occupation's essential skills a candidate must
+#   hold before the reasoner will classify them into it. This is the knob the
+#   results live on -- raise it for precision, lower it for recall -- and it
+#   is the one number a reviewer will ask you to justify.
+DEFAULT_SHORTLIST = int(os.environ.get("SHORTLIST", "20"))
+DEFAULT_MIN_SKILLS = int(os.environ.get("MIN_SKILLS", "2"))
 
 
 @dataclass
