@@ -1,168 +1,120 @@
-from fastapi import FastAPI
-import re
-import sys
-from pathlib import Path
-from owlready2 import (
-    World, get_ontology, sync_reasoner_pellet, sync_reasoner_hermit,
-    default_world, Thing, reasoning
-)
+import os
 from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import esco_store as store
 import matching
+import reasoning
 
-# The TBox gets its own World. default_world is bound to the 7.9M-triple data
-# quadstore, and loading the model there would write the schema into it.
-MODEL_WORLD = World()
+SKILL_NS = reasoning.SKILL_NS
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
-    print()
-
+    # Opens the prebuilt quadstore read-only. No parsing, and no reasoner:
+    # reasoning happens per request over a small generated ontology.
     store.open_store()
-    print(f"data store: {len(default_world.graph):,} triples")
-
-    reasoning.JAVA_MEMORY = 4096
-    onto = load("esco-model.rdf")
-    before, after = reason(onto)
-    show_inferences(before, after)
+    print(f"store : {store.STORE_PATH} ({len(store.default_world.graph):,} triples, read-only)")
+    # Build the typeahead index now so the first keystroke isn't the one
+    # that pays for it.
+    print(f"skills: {len(matching.skill_index()):,} indexed")
+    print(f"cors  : {CORS_ORIGINS} regex={CORS_ORIGIN_REGEX}")
     yield
-    onto.destroy()  # Ontology has no .clear()
-
-app = FastAPI(lifespan=lifespan)
-
-IMPORTS_RE = re.compile(r'owl:imports\s+rdf:resource="([^"]+)"')
 
 
-def stub_imports(p: Path):
-    """Register owl:imports targets as already-loaded empty ontologies.
+app = FastAPI(title="ESCO Reasoner", lifespan=lifespan)
 
-    owlready2 resolves imports by downloading them, and the ESCO model
-    imports http://purl.org/iso25964/skos-thes, which 404s -- that aborts the
-    whole load with OwlReadyOntologyParsingError. Ontology.load() returns
-    early when `loaded` is already True, so this skips the fetch.
+# The browser preflights every POST here, because the frontend is always a
+# different origin: :3000 in dev, a *.pages.dev or custom domain in prod.
+#
+# Configured from the environment, not hardcoded, because the deployed origin
+# is not known until Cloudflare Pages exists -- and baking it in would mean a
+# rebuild to change it. In Coolify, set:
+#
+#   CORS_ORIGINS=https://your-project.pages.dev,https://yourdomain.com
+#
+# CORS_ORIGIN_REGEX additionally covers Cloudflare Pages *preview* deploys,
+# which get a per-commit hostname like https://a1b2c3d4.your-project.pages.dev
+# and can therefore never be enumerated:
+#
+#   CORS_ORIGIN_REGEX=https://.*\.your-project\.pages\.dev
+#
+# Note it is fullmatch-ed, so anchor it and escape the dots -- an unescaped
+# "." matches any character and https://evil-yourproject.pages.dev would pass.
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    ).split(",")
+    if origin.strip()
+]
+CORS_ORIGIN_REGEX = os.environ.get("CORS_ORIGIN_REGEX") or None
 
-    Trade-off: axioms from those vocabularies are absent, so inferences
-    depending on them are not drawn. ESCO's own hierarchy is self-contained.
-    """
-    for iri in sorted(set(IMPORTS_RE.findall(p.read_text(encoding="utf-8")))):
-        # get_ontology() appends "#" to a bare IRI and matches that form
-        # against ontologies already registered in the world.
-        target = iri if iri.endswith(("#", "/")) else iri + "#"
-        MODEL_WORLD.get_ontology(target).loaded = True
-        print(f"stubbed import: {iri}")
-
-
-def load(path: str):
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        sys.exit(f"File not found: {p}")
-    stub_imports(p)
-    onto = MODEL_WORLD.get_ontology(p.as_uri()).load()
-    print(f"Loaded: {onto.base_iri}")
-    print(f"classes          : {len(list(onto.classes()))}")
-    print(f"object properties: {len(list(onto.object_properties()))}")
-    print(f"data properties  : {len(list(onto.data_properties()))}")
-    print(f"individuals      : {len(list(onto.individuals()))}")
-    return onto
-
-def snapshot(onto):
-    return {
-        e.name: {c.name for c in e.INDIRECT_is_a if hasattr(c, "name")}
-        for e in list(onto.classes()) + list(onto.individuals())
-        if hasattr(e, "INDIRECT_is_a")
-    }
-
-
-def reason(onto):
-    before = snapshot(onto)
-
-    try:
-        with onto:
-            # Passing `onto` is required, not cosmetic: with no argument these
-            # default to owlready2.default_world, which is now the 7.9M-triple
-            # data store -- the exact thing that OOM'd the JVM originally.
-            sync_reasoner_pellet(
-                onto,
-                infer_property_values=True,
-                infer_data_property_values=True,
-                debug=0,
-            )
-        print("\nReasoner: Pellet")
-    except Exception as e_pellet:
-        print("\nPellet did not start, falling back to Hermit.")
-        try:
-            with onto:
-                sync_reasoner_hermit(onto, infer_property_values=True, debug=0)
-            print("Reasoner: HermiT")
-        except Exception as e_hermit:
-            sys.exit("Both reasoners failed. \n"
-                     f"  Pellet: {str(e_pellet)[:180]}\n"
-                     f"  HermiT: {str(e_hermit)[:180]}")
-
-    after = snapshot(onto)
-    return before, after
-
-
-def show_inferences(before, after):
-    """Print only what the reasoner ADDED. """
-    found = False
-    for name, classes_after in sorted(after.items()):
-        gained = classes_after - before.get(name, set())
-        if gained:
-            found = True
-            print(f"  {name}")
-            for c in sorted(gained):
-                print(f"      -> is also a  {c}")
-    if not found:
-        print("  (nothing new - check that your defined classes use "
-              "'Equivalent To', not 'SubClass Of')")
-
-
-
-def members_of(onto, class_name):
-    """Every individual the reasoner considers a member of class_name."""
-    cls = onto[class_name]
-    if cls is None:
-        return []
-    return [i for i in onto.individuals() if cls in i.INDIRECT_is_a]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+    # Left off deliberately. There are no cookies or auth headers here, and
+    # allow_credentials=True is incompatible with a wildcard origin -- so
+    # turning it on later is a decision, not a default.
+    allow_credentials=False,
+)
 
 
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {
+        "store": str(store.STORE_PATH),
+        "triples": len(store.default_world.graph),
+        "skills_indexed": len(matching.skill_index()),
+    }
 
 
 @app.get("/skills")
-async def skills(q: str, lang: str = "en", limit: int = 20):
-    """Find skill ids by label, to build a profile for /match."""
+async def skills(q: str, lang: str = "en", limit: int = Query(20, ge=1, le=100)):
+    """Typeahead: find skill ids by label, to build a profile for /match."""
     return matching.search_skills(q, lang, limit)
 
 
 class Profile(BaseModel):
-    skill_ids: list[str] = Field(..., description="ESCO skill UUIDs, from /skills")
+    skill_ids: list[str] = Field(
+        ..., min_length=1, description="ESCO skill UUIDs or full IRIs, from /skills")
+    shortlist: int = Field(
+        reasoning.DEFAULT_SHORTLIST, ge=1, le=40,
+        description="occupations handed to the reasoner; above ~40 it stops terminating")
+    min_skills: int = Field(
+        reasoning.DEFAULT_MIN_SKILLS, ge=1,
+        description="how many of an occupation's essential skills a candidate must hold")
     lang: str = "en"
-    limit: int = Field(10, ge=1, le=100)
-    min_essential: int = Field(1, ge=0, description="ignore occupations requiring fewer skills")
-    sort: str = Field("score", pattern="^(score|matches)$")
-    include_gaps: bool = True
 
 
+def _as_iri(skill_id: str) -> str:
+    """Accept either a bare UUID (what /skills returns) or a full IRI."""
+    return skill_id if skill_id.startswith("http") else SKILL_NS + skill_id
+
+
+# Deliberately `def`, not `async def`. The reasoner blocks for seconds and
+# spawns a JVM; FastAPI runs a sync endpoint in a threadpool, so it does not
+# stall the event loop for every other request.
 @app.post("/match")
-async def match(profile: Profile):
-    """Rank occupations against a set of skills.
+def match(profile: Profile):
+    """Recommend occupations by classifying the candidate with a DL reasoner.
 
-    Plain SPARQL aggregation over the data store -- no OWL reasoner involved,
-    because ESCO's data carries no class axioms one could exploit.
+    SPARQL narrows ESCO's 3,046 occupations to a shortlist, those become OWL
+    defined classes, the candidate is asserted as an individual, and HermiT
+    classifies it. Expect a few seconds -- this is inference, not a query.
     """
-    return matching.match(
-        profile.skill_ids,
-        lang=profile.lang,
-        limit=profile.limit,
-        min_essential=profile.min_essential,
-        include_gaps=profile.include_gaps,
-        sort=profile.sort,
-    )
+    try:
+        return reasoning.recommend(
+            [_as_iri(s) for s in profile.skill_ids],
+            shortlist=profile.shortlist,
+            min_skills=profile.min_skills,
+            lang=profile.lang,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc

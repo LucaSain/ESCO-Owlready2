@@ -87,3 +87,27 @@ def type_counts() -> dict:
     for t, n in sparql("SELECT ?t (COUNT(?s) AS ?n) { ?s a ?t } GROUP BY ?t ORDER BY DESC(?n)"):
         out[str(iri(t))] = n
     return out
+
+
+def labels_for(entities, lang: str = "en") -> dict:
+    """{entity: preferred label} for a handful of entities.
+
+    ESCO uses SKOS-XL, so label text is not on the concept -- it hangs off a
+    skosxl:Label node via skosxl:prefLabel, then skosxl:literalForm.
+
+    The IN filter is load-bearing. Without it owlready2 plans this from the
+    1.1M skosxl:Label triples and the query takes ~40s; constrained to the
+    entities you already hold it is well under a second.
+    """
+    if not entities:
+        return {}
+    return {
+        entity: str(form)
+        for entity, form in sparql(
+            """SELECT ?e ?form {
+                 ?e skosxl:prefLabel ?lb . ?lb skosxl:literalForm ?form .
+                 FILTER(?e IN ??1 && LANG(?form) = ??2)
+               }""",
+            [list(entities), lang],
+        )
+    }

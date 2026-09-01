@@ -41,3 +41,14 @@ frontend/.vercel
 # typescript
 frontend/*.tsbuildinfo
 frontend/next-env.d.ts
+
+# reasoner/ -- the standalone learning scaffold. Keep the .py files, never
+# the 1.2 GB quadstore or the venv.
+reasoner/.env/
+reasoner/__pycache__/
+reasoner/esco.sqlite
+reasoner/esco.sqlite-journal
+reasoner/tmp/
+
+# backend build artifacts
+backend/tmp/

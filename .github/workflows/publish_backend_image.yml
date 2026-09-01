@@ -1,0 +1,100 @@
+# Build the backend image and publish it to GitHub Container Registry.
+# Coolify then pulls ghcr.io/<owner>/<repo>-backend to deploy.
+
+name: Publish backend image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Only rebuild when the backend actually changes. Note this makes the
+      # job *skipped* (not passed) on other commits, which matters if you
+      # ever make it a required status check.
+      - "backend/**"
+      - ".github/workflows/publish_backend_image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required to push to ghcr.io. GITHUB_TOKEN is injected automatically --
+  # there is no PAT to create, unlike the Cloudflare token.
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  # Lowercased below: ghcr.io rejects uppercase, and github.repository
+  # preserves the owner's casing.
+  IMAGE_NAME: ${{ github.repository }}-backend
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lowercase the image name
+        id: image
+        run: echo "name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          # `latest` is what Coolify follows; the sha tag is what lets you
+          # pin or roll back to an exact build.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+            type=ref,event=branch
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          # The Dockerfile expects the backend directory as its context --
+          # it does `COPY *.py ./`, and backend/.dockerignore keeps the
+          # 1.2 GB quadstore and the venv out of the upload.
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache in GitHub Actions storage. Without it, every run
+          # reinstalls the JRE and re-downloads owlready2's reasoner jars.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+# ---------------------------------------------------------------------------
+# AFTER THE FIRST SUCCESSFUL RUN
+# ---------------------------------------------------------------------------
+# - The package is created PRIVATE. Either make it public
+#     (repo -> Packages -> the package -> Package settings -> Danger Zone),
+#   or give Coolify a read token. A private package with no credentials fails
+#   at pull with "denied", which reads like the image does not exist.
+# - In Coolify, deploy ghcr.io/<owner>/<repo>-backend:latest and set:
+#     ESCO_STORE     /data/esco.sqlite3      (default; keep unless you move it)
+#     CORS_ORIGINS   https://<your-project>.pages.dev
+#   plus a persistent volume mounted at /data holding esco.sqlite3.
+#   The image does NOT contain the quadstore -- see backend/Dockerfile.
+# - `latest` moving does not by itself redeploy anything. Point Coolify's
+#   webhook at this workflow, or enable its polling, or the server keeps
+#   serving the old image indefinitely.

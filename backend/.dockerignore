@@ -1,0 +1,13 @@
+# Never ship these -- and keep them out of the build context, which is
+# otherwise ~2.5 GB and makes every build crawl.
+env/
+__pycache__/
+*.pyc
+tmp/
+esco.sqlite3
+esco.sqlite3-journal
+esco.rdf
+esco-model.rdf
+hs_err_pid*.log
+core.*
+*.zip

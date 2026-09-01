@@ -1,0 +1,5 @@
+# Direct dependencies. Install with:  pip install -r requirements.txt
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+pydantic==2.13.4
+owlready2==0.51
