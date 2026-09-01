@@ -37,8 +37,11 @@ from owlready2 import (  # noqa: E402
 
 from esco_store import default_world, labels_for, sparql  # noqa: E402
 
-# MEGABYTES, not bytes.
-reasoning.JAVA_MEMORY = 4096
+# MEGABYTES, not bytes -- 8*1024*1024 here would ask for an 8 TB heap and
+# the JVM aborts. This is a ceiling, not a reservation, but the container
+# memory limit must still exceed it or the kernel OOM-kills the JVM mid-run.
+# Keep JAVA_MEMORY_MB comfortably under the container limit.
+reasoning.JAVA_MEMORY = int(os.environ.get("JAVA_MEMORY_MB", "2048"))
 
 SKILL_NS = "http://data.europa.eu/esco/skill/"
 

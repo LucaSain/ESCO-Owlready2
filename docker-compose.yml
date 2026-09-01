@@ -1,0 +1,102 @@
+# Coolify deployment for the ESCO reasoner backend.
+#
+# Deploy this as a "Docker Compose" resource in Coolify. The compose file is
+# the single source of truth -- set the variables below in Coolify's
+# environment tab, not by editing this file.
+
+services:
+  backend:
+    image: ghcr.io/lucasain/esco-owlready2-backend:latest
+    restart: unless-stopped
+
+    environment:
+      # Coolify replaces this with the generated domain and points its proxy
+      # at container port 8000. Assign a domain in the UI, or let it use the
+      # wildcard. Nothing else is needed to expose the service.
+      - SERVICE_FQDN_BACKEND_8000
+
+      # REQUIRED. The `:?` form makes Coolify refuse to deploy when it is
+      # unset, rather than starting a backend that silently blocks every
+      # browser request with a CORS error that looks like a frontend bug.
+      # Comma-separated, no spaces, scheme included:
+      #   https://esco.pages.dev,https://yourdomain.com
+      - CORS_ORIGINS=${CORS_ORIGINS:?set this to your Cloudflare Pages origin}
+
+      # Optional: also allow Cloudflare Pages *preview* deploys, whose
+      # hostnames are per-commit and cannot be enumerated. Escape the dots --
+      # an unescaped "." matches any character, so evil-esco.pages.dev would
+      # pass. Leave unset if only production should reach the API.
+      #   https://.*\.esco\.pages\.dev
+      - CORS_ORIGIN_REGEX=${CORS_ORIGIN_REGEX:-}
+
+      # Where the quadstore is mounted. Matches the volume below; change
+      # both together or not at all.
+      - ESCO_STORE=/data/esco.sqlite3
+
+      # HermiT's max heap. Must stay comfortably below the memory limit
+      # further down, or the kernel kills the JVM mid-request and the
+      # response is a 500 with nothing useful in the logs.
+      - JAVA_MEMORY_MB=${JAVA_MEMORY_MB:-2048}
+
+    volumes:
+      # The 1.2 GB ESCO quadstore. It is NOT in the image -- the image is
+      # 574 MB of code and a JRE. See "POPULATING THE VOLUME" below.
+      #
+      # Deliberately NOT :ro. esco_store.py already opens sqlite with
+      # mode=ro, so nothing can write through the app anyway, and a
+      # read-only mount would block the docker cp needed to populate the
+      # volume in the first place. Several replicas can still share it.
+      - esco-data:/data
+
+    healthcheck:
+      # start_period is generous on purpose: opening the quadstore and
+      # building the 14k-row skill index takes a few seconds, and a tighter
+      # window makes Coolify restart-loop a container that is merely booting.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/',timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
+    deploy:
+      resources:
+        limits:
+          # Python + the skill index sits around 80 MB idle; the rest is
+          # headroom for the JVM. Keep this above JAVA_MEMORY_MB plus ~1 GB.
+          memory: 3G
+
+volumes:
+  esco-data:
+
+# ---------------------------------------------------------------------------
+# POPULATING THE VOLUME  (once, before the first real request)
+# ---------------------------------------------------------------------------
+# /match needs esco.sqlite3 on the volume. Without it the container starts,
+# fails its healthcheck, and Coolify restarts it forever -- the logs say
+# "Quadstore not found", which is the thing to look for.
+#
+# From a machine that already has the built store, with the stack running:
+#
+#   docker cp esco.sqlite3 <container>:/data/esco.sqlite3
+#
+# Or populate it without the stack running at all:
+#
+#   docker run --rm -v esco-data:/data -v "$PWD":/src alpine \
+#     cp /src/esco.sqlite3 /data/esco.sqlite3
+#
+# To build it on the server instead, from esco.rdf (1.1 GB):
+#
+#   docker run --rm -v esco-data:/data -v "$PWD":/src \
+#     -e ESCO_RDF=/src/esco.rdf -e ESCO_STORE=/data/esco.sqlite3 \
+#     ghcr.io/lucasain/esco-owlready2-backend:latest python ingest.py
+#
+# ---------------------------------------------------------------------------
+# ALSO
+# ---------------------------------------------------------------------------
+# - The GHCR package is private by default. Coolify pulling without
+#   credentials gets "denied", which reads like the image does not exist.
+#   Make the package public, or add a registry credential in Coolify.
+# - Pushing a new `latest` does not redeploy anything by itself. Point the
+#   publish workflow at Coolify's deploy webhook, or turn on its polling.
+# - /match takes seconds by design -- it runs a DL reasoner. If you put a
+#   proxy timeout in front of this, keep it above ~30s.
