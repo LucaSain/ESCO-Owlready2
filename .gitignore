@@ -58,3 +58,4 @@ backend/*.zst
 
 # notebook checkpoints and generated outputs
 measurements/.ipynb_checkpoints/
+measurements/__pycache__/
