@@ -7,6 +7,7 @@
 services:
   backend:
     image: ghcr.io/lucasain/esco-owlready2-backend:latest
+    pull_policy: always
     restart: unless-stopped
 
     environment:
