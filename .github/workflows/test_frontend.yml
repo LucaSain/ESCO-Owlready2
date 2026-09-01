@@ -61,7 +61,14 @@ jobs:
       # cost so a fast failure (a type error) does not wait behind a slow
       # one (the production build).
       - name: Type check
-        run: "npx tsc --noEmit"
+        # `npm run typecheck`, not a bare tsc: app/layout.tsx uses
+        # LayoutProps<"/">, a type Next GENERATES into .next/types. On a
+        # clean checkout that file does not exist, so a bare `tsc --noEmit`
+        # fails with "Cannot find name 'LayoutProps'" -- it only passes
+        # locally because an earlier build left .next behind. The script
+        # runs `next typegen` first, which emits those types without a
+        # full build.
+        run: "npm run typecheck"
 
       - name: Lint
         run: "npm run lint"
