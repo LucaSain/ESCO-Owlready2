@@ -22,6 +22,36 @@ type MatchResponse = {
   seconds: number;
 };
 
+function Spinner() {
+  return (
+    <svg
+      className="size-4 animate-spin"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Placeholder cards, so the answer has a visible destination while the
+ *  reasoner runs. Shown only on the first request, when there is nothing
+ *  older to keep on screen. */
+function ResultsSkeleton() {
+  return (
+    <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="rounded-xl border border-black/10 p-5 dark:border-white/15">
+          <div className="h-4 w-2/3 animate-pulse rounded bg-black/10 dark:bg-white/15" />
+          <div className="mt-3 h-3 w-1/3 animate-pulse rounded bg-black/5 dark:bg-white/10" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Skill[]>([]);
@@ -31,6 +61,7 @@ export default function Home() {
 
   const [data, setData] = useState<MatchResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -67,6 +98,16 @@ export default function Home() {
       controller.abort();
     };
   }, [query, selected]);
+
+  // Reasoning genuinely takes seconds, so show the clock rather than a
+  // spinner that could mean anything. Cleared by the effect's teardown when
+  // `loading` flips back.
+  useEffect(() => {
+    if (!loading) return;
+    const started = Date.now();
+    const id = setInterval(() => setElapsed((Date.now() - started) / 1000), 100);
+    return () => clearInterval(id);
+  }, [loading]);
 
   function add(skill: Skill) {
     setSelected((prev) => [...prev, skill]);
@@ -110,8 +151,11 @@ export default function Home() {
     if (selected.length === 0) return;
 
     setLoading(true);
+    setElapsed(0);
     setError(null);
-    setData(null);
+    // Deliberately NOT clearing `data`: blanking the page while a
+    // multi-second request runs reads as "it broke". The old results stay,
+    // dimmed, until the new ones land.
     try {
       const res = await fetch(`${API}/match`, {
         method: "POST",
@@ -219,10 +263,24 @@ export default function Home() {
             disabled={loading || selected.length === 0}
             className="rounded-lg bg-foreground px-5 py-2.5 text-sm font-medium text-background disabled:opacity-40"
           >
-            {loading ? "Reasoning…" : "Match"}
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <Spinner />
+                Reasoning… {elapsed.toFixed(1)}s
+              </span>
+            ) : (
+              "Match"
+            )}
           </button>
         </div>
       </form>
+
+      {/* Screen readers get the same signal the button shows visually. */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {loading ? `Reasoning, ${elapsed.toFixed(0)} seconds elapsed` : ""}
+      </p>
+
+      {loading && !data && <ResultsSkeleton />}
 
       {error && (
         <p className="mt-6 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-600 dark:text-red-400">
@@ -231,7 +289,9 @@ export default function Home() {
       )}
 
       {data && (
-        <section className="mt-10">
+        <section
+          className={`mt-10 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}
+        >
           <p className="text-sm text-black/50 dark:text-white/50">
             {data.skills_used} skill{data.skills_used === 1 ? "" : "s"} used ·
             threshold {data.min_skills} · reasoned in {data.seconds}s
