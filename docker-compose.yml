@@ -33,6 +33,12 @@ services:
       # both together or not at all.
       - ESCO_STORE=/data/esco.sqlite3
 
+      # First boot on an empty volume fetches and decompresses the store from
+      # here (~400 MB, about a minute). Every later boot finds the file and
+      # skips it, so this costs once per volume, not once per deploy. Unset
+      # it only if you provision the volume by hand.
+      - ESCO_STORE_URL=${ESCO_STORE_URL:-https://github.com/LucaSain/ESCO-Owlready2/releases/download/esco-data-v1/esco.sqlite3.zst}
+
       # HermiT's max heap. Must stay comfortably below the memory limit
       # further down, or the kernel kills the JVM mid-request and the
       # response is a 500 with nothing useful in the logs.
@@ -49,13 +55,14 @@ services:
       - esco-data:/data
 
     healthcheck:
-      # start_period is generous on purpose: opening the quadstore and
-      # building the 14k-row skill index takes a few seconds, and a tighter
-      # window makes Coolify restart-loop a container that is merely booting.
+      # start_period covers the WORST case: a first boot that downloads 400 MB
+      # and decompresses it to 1.2 GB before uvicorn ever listens. A tighter
+      # window makes Coolify kill and restart a container that is provisioning
+      # correctly -- which then restarts the download, forever.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/',timeout=5).status==200 else 1)"]
       interval: 30s
       timeout: 10s
-      start_period: 90s
+      start_period: 600s
       retries: 3
 
     deploy:
@@ -69,11 +76,14 @@ volumes:
   esco-data:
 
 # ---------------------------------------------------------------------------
-# POPULATING THE VOLUME  (once, before the first real request)
+# THE VOLUME PROVISIONS ITSELF
 # ---------------------------------------------------------------------------
-# /match needs esco.sqlite3 on the volume. Without it the container starts,
-# fails its healthcheck, and Coolify restarts it forever -- the logs say
-# "Quadstore not found", which is the thing to look for.
+# Nothing to do: the entrypoint downloads the store on first boot. Expect
+# ~1 minute of "entrypoint: quadstore missing, fetching ..." in the logs,
+# once, then "entrypoint: quadstore present" on every restart after.
+#
+# The manual routes below are only needed if you would rather not depend on
+# the release asset, or are running somewhere without outbound internet.
 #
 # From a machine that already has the built store, with the stack running:
 #

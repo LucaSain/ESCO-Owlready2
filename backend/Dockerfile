@@ -10,7 +10,10 @@ FROM python:3.14-slim AS base
 # the reasoning step, while /skills keeps working -- a confusing half-broken
 # deploy. headless keeps it to the runtime, no AWT/X11.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends default-jre-headless \
+ && apt-get install -y --no-install-recommends \
+      default-jre-headless \
+      curl \
+      zstd \
  && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUNBUFFERED=1 \
@@ -25,6 +28,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY *.py ./
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Non-root. The reasoner writes an ontology export per request, so it needs
 # one writable directory -- ESCO_TMPDIR, not the source tree.
@@ -42,9 +46,12 @@ EXPOSE 8000
 # async here. Coolify can override the command to raise --workers; note each
 # worker opens its own read-only handle on the quadstore, which is fine, but
 # each also builds its own 14k-row skill index in memory.
+# The entrypoint provisions the quadstore if the volume is empty, then execs
+# the CMD. Overriding CMD (e.g. to run ingest.py) still gets the same check.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/',timeout=5).status==200 else 1)"
 
 # ---------------------------------------------------------------------------

@@ -52,3 +52,6 @@ reasoner/tmp/
 
 # backend build artifacts
 backend/tmp/
+
+# compressed quadstore -- distributed as a release asset, never committed
+backend/*.zst
